@@ -18,6 +18,7 @@ def extract_features(epochs):
         features.append(mean_power)
     return np.array(features)
 
+
 #* Naloži .mat datoteko
 mat = scipy.io.loadmat('Final_ALLEEG_datasets_Coffe.mat')
 

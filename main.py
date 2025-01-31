@@ -6,176 +6,135 @@ from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, accuracy_score, confusion_matrix, ConfusionMatrixDisplay
 import matplotlib.pyplot as plt
-import seaborn as sns
+from xgboost import XGBClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.neural_network import MLPClassifier
 
-#* Izvlečemo značilke iz epoh
+# Function to extract features from epochs
 def extract_features(epochs):
     features = []
-    data = epochs.get_data()  #? Izvlečemo podatke iz epoh    
+    data = epochs.get_data()  # Get data from epochs
     for epoch in data:
         psd, freqs = psd_array_multitaper(epoch, sfreq=epochs.info['sfreq'], fmin=1, fmax=40, n_jobs=1)
-        mean_power = np.mean(psd, axis=1)
+        mean_power = np.mean(psd, axis=1)  # Mean power across frequencies
         features.append(mean_power)
     return np.array(features)
 
+# Function to evaluate and plot results for a model
+def evaluate_model(model, X_test, y_test, model_name):
+    y_pred = model.predict(X_test)
+    print(f"Results for {model_name}:")
+    print("Accuracy:", accuracy_score(y_test, y_pred))
+    print("Classification Report:")
+    print(classification_report(y_test, y_pred, target_names=['Placebo', 'Caffeine']))
+    
+    # Plot confusion matrix
+    cm = confusion_matrix(y_test, y_pred)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=['Placebo', 'Caffeine'])
+    disp.plot(cmap=plt.cm.Blues)
+    plt.title(f'Confusion Matrix - {model_name}')
+    plt.show()
 
-#* Naloži .mat datoteko
+# Load .mat file
 mat = scipy.io.loadmat('Final_ALLEEG_datasets_Coffe.mat')
-
-#* Preverimo ključe v .mat datoteki
-# print("Keys in the .mat file:", mat.keys())
-
-#* Preverimo ključ 'ALLEEG'
 alleeg = mat['ALLEEG']
+print("Number of participants:", len(alleeg[0]))  # Should print 38
 
-#* Preverimo tip 'ALLEEG'
-# print("Dtype of 'ALLEEG':", alleeg.dtype)
-
-#* Tabele za shranjevanje podatkov
+# Lists to store data and labels
 all_eeg_data = []
 all_labels = []
+all_subject_ids = []  # To store subject IDs for each epoch
 
-#* Za vsak posamezen vnos v 'alleeg' izvlečemo EEG podatke
-for entry in alleeg[0]:
-    #* Izvlečemo EEG podatke
+# Extract EEG data, labels, and subject IDs
+for subject_idx, entry in enumerate(alleeg[0]):
     eeg_data = entry['data']
-    
-    #* Izvlečemo obliko EEG podatkov
-    # print(f"EEG data shape: {eeg_data.shape}")
-
-    #* Izvlečemo število kanalov, število poskusov in število vzorcev
     n_channels, n_trials, n_samples = eeg_data.shape
-    # print(f"Number of channels: {n_channels}, Number of trials: {n_trials}, Number of samples: {n_samples}")
     
-    #! n_channels - Število EEG kanalov (elektrod).
-    #! n_trials - Število poskusov (ponovitev eksperimenta).
-    #! n_samples - Število časovnih točk (vzorcev), posnetih v vsakem poskusu.
-
-    #* Spremenimo EEG podatke v 2D (n_channels, n_samples)
+    # Reshape EEG data to 2D (n_channels, n_trials * n_samples)
     eeg_data_reshaped = eeg_data.reshape(n_channels, n_trials * n_samples)
-
-    #* Dodamo EEG podatke v tabelo
     all_eeg_data.append(eeg_data_reshaped)
     
-    #* Izvlečemo oznake
+    # Extract group label (Caffeine or Placebo)
     group_label = entry['group']
-    #* Dodamo oznake v tabelo
     labels = [group_label] * n_trials
     all_labels.extend(labels)
+    
+    # Assign subject IDs for each epoch
+    all_subject_ids.extend([subject_idx] * n_trials)
 
-#* Spremenimo tabelo v numpy array
+# Combine EEG data into a single array
 eeg_data_combined = np.concatenate(all_eeg_data, axis=1)
 
-#* Ustvarimo edinstvena imena kanalov
+# Create channel names
 ch_names = [f'EEG{i+1}' for i in range(n_channels)]
 
-#* Ustvarimo MNE RawArray objekt
+# Create MNE RawArray object
 info = mne.create_info(ch_names=ch_names, sfreq=256, ch_types='eeg')
 raw = mne.io.RawArray(eeg_data_combined, info)
 
-#* Shranimo RawArray objekt v datoteko
-output_path = 'eeg_data_raw.fif'
-raw.save(output_path, overwrite=True)
-
-#* Filtriramo podatke
+# Filter the data
 raw_filtered = raw.copy().filter(l_freq=1.0, h_freq=40.0)
 
-#* Preverimo dolžino tabele z oznakami
-print("Number of labels:", len(all_labels))
-print("Number of trials:", len(all_labels))
-
-#* Ustvarimo dogodke na podlagi pravih oznak
+# Create events based on labels
 events = np.zeros((len(all_labels), 3), int)
-events[:, 0] = np.arange(len(all_labels)) * n_samples  #* Začetek dogodka
-events[:, 2] = np.where(np.array(all_labels) == 'Caffeine', 1, 2).flatten()  #* Določimo ID dogodkov
+events[:, 0] = np.arange(len(all_labels)) * n_samples  # Event start
+events[:, 2] = np.where(np.array(all_labels) == 'Caffeine', 1, 2).flatten()  # Event IDs
 
-#* Določimo ID dogodkov
+# Define event IDs
 event_id = {'Caffeine': 1, 'Placebo': 2}
 
-#* Segmentiramo podatke v epohe
+# After creating the epochs object, check which epochs are included
 epochs = mne.Epochs(raw_filtered, events, event_id, tmin=0, tmax=(n_samples-1)/raw.info['sfreq'], baseline=None, preload=True)
 
-#* Izpišemo število poskusov za vsako stanje
-print("Number of Caffeine trials:", len(epochs['Caffeine']))
-print("Number of Placebo trials:", len(epochs['Placebo']))
+# Get the indices of the epochs that are included
+included_epoch_indices = epochs.selection  # This gives the indices of the epochs that are included
 
-#* Izvlečemo značilke iz epoh
-caffeine_features = extract_features(epochs['Caffeine'])
-placebo_features = extract_features(epochs['Placebo'])
+# Filter subject_ids_combined to include only the epochs that are included
+subject_ids_combined = np.array(all_subject_ids)[included_epoch_indices]
 
-#* Ustvarimo oznake
-caffeine_labels = np.ones(len(caffeine_features))
-placebo_labels = np.zeros(len(placebo_features))
+# Extract features from epochs
+X = extract_features(epochs)
+y = np.array([1 if label == 'Caffeine' else 0 for label in all_labels])[included_epoch_indices]  # Convert labels to binary and filter
 
-#* Združimo značilke in oznake
-X = np.concatenate([caffeine_features, placebo_features], axis=0)
-y = np.concatenate([caffeine_labels, placebo_labels], axis=0)
+# Debug: Check lengths
+print("Length of X:", len(X))
+print("Length of subject_ids_combined:", len(subject_ids_combined))
+print("Number of epochs in epochs object:", len(epochs))
+print("Number of included epoch indices:", len(included_epoch_indices))
 
-#* Razdelimo podatke na učno in testno množico
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+# Ensure lengths match
+if len(X) != len(subject_ids_combined):
+    raise ValueError("Length of X and subject_ids_combined do not match. Check feature extraction and subject ID assignment.")
 
-#* Ustvarimo in naučimo model
-clf = RandomForestClassifier(n_estimators=100, random_state=42)
-clf.fit(X_train, y_train)
+# Split data based on participants
+unique_subjects = np.unique(subject_ids_combined)
+train_subjects, test_subjects = train_test_split(unique_subjects, test_size=0.2, random_state=42)
 
-#* Napovemo testno množico
-y_pred = clf.predict(X_test)
+# Create masks for training and testing sets
+train_mask = np.isin(subject_ids_combined, train_subjects)
+test_mask = np.isin(subject_ids_combined, test_subjects)
 
-#* Izpišemo rezultate
-print("Accuracy:", accuracy_score(y_test, y_pred))
-print("Classification Report:")
-print(classification_report(y_test, y_pred, target_names=['Placebo', 'Caffeine']))
+# Split features and labels
+X_train, X_test = X[train_mask], X[test_mask]
+y_train, y_test = y[train_mask], y[test_mask]
 
-"""
-!Rezultati:
-Classification Report:
-              precision    recall  f1-score   support
+# Train and evaluate Random Forest
+clf_rf = RandomForestClassifier(n_estimators=100, random_state=42)
+clf_rf.fit(X_train, y_train)
+evaluate_model(clf_rf, X_test, y_test, "Random Forest")
 
-     Placebo       1.00      1.00      1.00      4070
-    Caffeine       1.00      1.00      1.00      5287
+# Train and evaluate Logistic Regression
+clf_lr = LogisticRegression(random_state=42, max_iter=1000)  # Increase max_iter for convergence
+clf_lr.fit(X_train, y_train)
+evaluate_model(clf_lr, X_test, y_test, "Logistic Regression")
 
-    accuracy                           1.00      9357
-   macro avg       1.00      1.00      1.00      9357
-weighted avg       1.00      1.00      1.00      9357
+# Train and evaluate Gradient Boosting (XGBoost)
+clf_xgb = XGBClassifier(n_estimators=100, random_state=42)
+clf_xgb.fit(X_train, y_train)
+evaluate_model(clf_xgb, X_test, y_test, "XGBoost")
 
-*Precision: Delež pravilno pozitivnih napovedi glede na vse pozitivne napovedi.
-*Recall: Delež pravilno pozitivnih napovedi glede na vse dejansko pozitivne primere.
-*F1-score: Harmonično povprečje med precision in recall.
-*Support: Število primerov v vsakem razredu.
-*Accuracy: Delež pravilnih napovedi glede na vse napovedi.
-*Macro avg: Povprečje vseh razredov.
-*Weighted avg: Povprečje vseh razredov, pri čemer so upoštevane uteži glede na število primerov v vsakem razredu.
-
-Klasifikator je dosegel popolno uspešnost na testni množici,
-z natančnostjo, odzivnostjo in F1-oceno 1,00 za obe skupini.
-To nakazuje, da je klasifikator sposoben popolnoma razlikovati med skupinama:
-"Placebo" in "Kofein" v tem naboru podatkov.
-
-? 20% - testna množica | 80% - učna množica
-
-!Celotno število coffee poskusov": 26623
-!Celotno število placebo poskusov": 20160
-
-!Število poskusov za "Caffeine" v testni množici: 26623 * 0.2 ≈ 5325
-!Število poskusov za "Placebo" v testni množici: 20160 * 0.2 = 4032
-"""
-
-#* Generiramo in prikažemo matriko zmede
-cm = confusion_matrix(y_test, y_pred)
-
-#* Prikaz matrike zmede
-disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=['Placebo', 'Caffeine'])
-disp.plot(cmap=plt.cm.Blues)
-plt.title('Confusion Matrix')
-plt.show()
-
-#* Izračunamo pomembnost značilk
-importances = clf.feature_importances_
-
-#* Prikaz pomembnosti značilk
-plt.figure(figsize=(10, 6))
-plt.bar(range(len(importances)), importances)
-plt.xlabel('Feature Index')
-plt.ylabel('Importance')
-plt.title('Feature Importances')
-plt.show()
+# Train and evaluate k-Nearest Neighbors (k-NN)
+clf_knn = KNeighborsClassifier(n_neighbors=5)  # Use 5 neighbors by default
+clf_knn.fit(X_train, y_train)
+evaluate_model(clf_knn, X_test, y_test, "k-Nearest Neighbors")

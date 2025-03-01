@@ -78,7 +78,7 @@ def evaluate_leave_one_out(model, X, y, subject_ids, model_name):
 mne.set_log_level("ERROR") # Delete if you want to see errors!
 
 # Load .mat file
-mat = scipy.io.loadmat('Final_ALLEEG_datasets_Coffe.mat')
+mat = scipy.io.loadmat("ADD YOUR FILE PATH HERE")
 alleeg = mat['ALLEEG']
 print("Number of participants:", len(alleeg[0]))
 

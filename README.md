@@ -18,3 +18,7 @@ This repository provides a Python script for processing EEG data, extracting fea
 - scikit-learn
 - matplotlib
 - seaborn
+
+# Used Data:
+
+Data used for this project can be acquired here: https://figshare.com/articles/dataset/Regular_coffee_has_almost_the_same_effect_as_decaf_on_habitual_coffee_drinkers_-_data_and_code/25592466/1
